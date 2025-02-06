@@ -11,6 +11,9 @@ def generate_convert(model_id,
                      model_create_function,
                      model_apply_function,
                      model_learn_function,
+                     data_preprocess_function = None,  # function that preprocesses the data
+                     data_postprocess_function = None,  # function that postprocesses the data
+                     label_preprocess_function = None,  # function that preprocesses the labels for training
                      dimensionality=2,
                      model_type=DynamicDLModel,
                      metadata=None):
@@ -60,6 +63,9 @@ def generate_convert(model_id,
     modelObject = model_type(model_id,
                                  model_create_function,
                                  model_apply_function,
+                                 data_preprocess_function=data_preprocess_function,  # function that preprocesses the data
+                                 data_postprocess_function=data_postprocess_function,  # function that postprocesses the data
+                                 label_preprocess_function=label_preprocess_function,  # function that preprocesses the labels for training
                                  incremental_learn_function=model_learn_function,
                                  weights=weights,
                                  timestamp_id=timestamp,
