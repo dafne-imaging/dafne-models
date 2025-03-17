@@ -38,7 +38,20 @@ def init_folds():
         use_v2= False,
     )
 
-    model_fold1 = UNETR(
+    model_fold1 = DynUNet(
+        spatial_dims=3,
+        in_channels=1,
+        out_channels=2,
+        kernel_size= [3, [1, 1, 3], 3, 3],
+        strides= [1, 2, 2, 1],
+        upsample_kernel_size= [2, 2, 1],
+        norm_name=("INSTANCE", {"affine": True}),
+        deep_supervision= False,
+        deep_supr_num= 1,
+        res_block= False,
+    )
+
+    model_fold2 = UNETR(
         feature_size= 16,
         img_size=(128,128,128),
         in_channels=1,
@@ -54,56 +67,45 @@ def init_folds():
         # use_checkpoint: True
     )
 
-    model_fold2 = DynUNet(
-        spatial_dims=3,
+    model_fold3 = SwinUNETR(
+        feature_size= 48,
+        img_size=(128,128,128),
         in_channels=1,
         out_channels=2,
-        kernel_size= [3, [1, 1, 3], 3, 3],
-        strides= [1, 2, 2, 1],
-        upsample_kernel_size= [2, 2, 1],
-        norm_name=("INSTANCE", {"affine": True}),
-        deep_supervision= False,
-        deep_supr_num= 1,
-        res_block= False,
-    )
-
-    model_fold3 = DynUNet(
-        spatial_dims=3,
-        in_channels=1,
-        out_channels=2,
-        kernel_size= [3, [1, 1, 3], 3, 3],
-        strides= [1, 2, 2, 1],
-        upsample_kernel_size= [2, 2, 1],
-        norm_name=("INSTANCE", {"affine": True}),
-        deep_supervision= False,
-        deep_supr_num= 1,
-        res_block= False,
+        spatial_dims= 3,
+        use_checkpoint= False,
+        use_v2= False,
     )
     
-    model_fold4 = DynUNet(
-        spatial_dims=3,
+    model_fold4 = SwinUNETR(
+        feature_size= 48,
+        img_size=(128,128,128),
         in_channels=1,
         out_channels=2,
-        kernel_size= [3, [1, 1, 3], 3, 3],
-        strides= [1, 2, 2, 1],
-        upsample_kernel_size= [2, 2, 1],
-        norm_name=("INSTANCE", {"affine": True}),
-        deep_supervision= False,
-        deep_supr_num= 1,
-        res_block= False,
+        spatial_dims= 3,
+        use_checkpoint= False,
+        use_v2= False,
     )
 
     return model_fold0, model_fold1, model_fold2, model_fold3, model_fold4
 
 def ensemble_apply(modelObj, data: dict):
+    try:
+        import dafne_dl.common.preprocess_train as pretrain 
+    except ModuleNotFoundError:
+        import dl.common.preprocess_train as pretrain 
     from dafne_dl.interfaces import WrongDimensionalityError
+    import os
+    import gc
     import numpy as np
     from monai.transforms import (
         Compose,
-        LoadImaged,
+        # LoadImaged,
         EnsureChannelFirstd,
+        EnsureTyped,
         Orientationd,
         Spacingd,
+        # SpatialResample,
         CastToTyped,
         ScaleIntensityd,
         Invertd,
@@ -112,11 +114,20 @@ def ensemble_apply(modelObj, data: dict):
         AsDiscreted,
     )
     from monai.inferers import sliding_window_inference
+    from monai.utils import set_determinism
+    from monai.data import MetaTensor, Dataset, DataLoader, decollate_batch
     import torch
 
+    set_determinism(seed=0)
+
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:native,max_split_size_mb:32,expandable_segments:True"
+
     # Parameters
+    MODEL_RESOLUTION = np.array([1.0, 1.0, 1.0])
     roi_size = (128,128,128)
     sw_batch_size = 1
+
+    # data = pretrain.common_input_process_ensemble_inference(data, MODEL_RESOLUTION)
 
     if len(data['image'].shape) != 3:
         raise WrongDimensionalityError("Input image must be 3D")
@@ -129,25 +140,10 @@ def ensemble_apply(modelObj, data: dict):
         else:
             device = 0
 
-    image = data['image']
-    affine=data['affine']
-
-    image = np.expand_dims(image, axis=0)
-
-    torch_data = {
-        "image": image.astype(np.float32),
-        "image_meta_dict": {
-            "original_channel_dim": 0,
-            "spatial_shape": image.shape[1:],
-            "affine": affine,
-        }
-    }
-
-    print("Running model...")
-
     # Define data transforms
-    transforms = Compose(
+    pre_transforms = Compose(
         [
+            EnsureChannelFirstd(keys=["image"], channel_dim=0),
             Orientationd(keys=["image"], axcodes="RAS"),
             Spacingd(keys=["image"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear"), align_corners=True),
             CastToTyped(keys=["image"], dtype= np.float32),
@@ -160,7 +156,7 @@ def ensemble_apply(modelObj, data: dict):
         [
             Invertd(
                 keys="pred",
-                transform=transforms,
+                transform=pre_transforms,
                 orig_keys="image",
                 meta_keys="pred_meta_dict",
                 orig_meta_keys="image_meta_dict",
@@ -168,64 +164,90 @@ def ensemble_apply(modelObj, data: dict):
                 nearest_interp=False,
                 to_tensor=True,
             ),
-            Activationsd(keys="pred", softmax=False, sigmoid=True),
-            AsDiscreted(keys="pred", threshold=0.5),
+            Activationsd(keys="pred", softmax=True, sigmoid=False),
             CopyItemsd(keys="pred", times=1, names="pred_final"),
+            AsDiscreted(keys="pred_final", argmax=True), #argmax=True
         ]
     )
 
-    input_data = transforms(torch_data)
+    # data loading
 
-    input_tensor = torch.tensor(input_data['image']).to(device).unsqueeze(0) #torch.tensor(input_data['image']).to(device).unsqueeze(0)
+    image = data['image']
+    affine=data['affine']
 
-    models=[]
+    if image.ndim == 3: 
+        image = np.expand_dims(image, axis=0)
 
-    for ii in range(5):
+    torch_data = [
+        {
+            "image" : MetaTensor(image, affine = affine),
+        },
+    ]
+    input_data = Dataset(data=torch_data, transform=pre_transforms)
+    input_tensor = DataLoader(input_data, batch_size=1, num_workers=0)
 
-        model = modelObj.model[ii]
-        model.eval()
-        models.append(model)
-
-    print("Model loaded")
-
-    # Calculate model output (decrease overlap parameter for faster but less accurate results)
+    torch.cuda.empty_cache()
+    gc.collect()
+    
     with torch.no_grad():
 
         seg_all=[]
 
-        for ii, model_load in enumerate(models):
+        for ii in range(5):
 
-            val_output = sliding_window_inference(
-                input_tensor, roi_size, sw_batch_size, model_load, mode="gaussian", overlap=0.8
-            )
-            print("Model applied")
+            torch.cuda.empty_cache()
+            gc.collect()
 
-            # Pass both the prediction (val_output) and metadata (image_meta_dict) to post_pred
-            post_pred_input = {
-                "pred": val_output,
-                "pred_meta_dict": {
-                    "spatial_shape": input_data['image'].shape[1:],  
-                    "affine": affine 
-                },
-                "image_meta_dict": torch_data["image_meta_dict"] 
-            }
-            val_outputs_post = post_pred(post_pred_input)
-            # Postprocessing
-            val_outputs_convert = val_outputs_post['pred_final'].cpu().numpy() 
-            seg = np.squeeze(val_outputs_convert[0, 1, ...])  
+            model_load = modelObj.model[ii].to(device)
+            model_load.eval()
+            print('model loaded')
+
+            test_data = list(input_tensor)[0]
+            test_input = test_data["image"].to(device)
+
+            with torch.no_grad():
+
+                test_data["pred"] = sliding_window_inference(test_input, roi_size, sw_batch_size, model_load, mode="gaussian", overlap=0.5)
+                print("Model applied")
+
+            # Post-processing
+            val_outputs_list = decollate_batch(test_data)
+
+            val_output_convert = [post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list]
+
+            val_output=val_output_convert[0]["pred_final"]
+
+            model_load.to('cpu')
+            torch.cuda.empty_cache()
+            gc.collect()
+            del model_load
+
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            print('val_output shape: ', val_output.shape)
+
+            seg = np.squeeze(val_output[0, ...]) 
             seg_all.append(seg)
 
+            del val_output, val_output_convert, val_outputs_list, test_data, test_input
+            torch.cuda.empty_cache()
+            gc.collect()
+
         # Ensemble predictions
-        seg_all_tensor = torch.stack([torch.tensor(seg) for seg in seg_all]).to(device)  
-        summed_voxel = torch.sum(seg_all_tensor, dim=0)
-        ensemble = (summed_voxel > 2).cpu().numpy()  
+        seg_all = [torch.tensor(arr) for arr in seg_all]
+        summed_voxel=seg_all[0]
+        for i in range(1, 5):
+            summed_voxel=torch.add(summed_voxel, seg_all[i])
+
+        ensemble=torch.where(summed_voxel>2, 1, 0).cpu().numpy()
 
     return {
         'CHP': ensemble.astype(np.uint8),
     }
 
 
-def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs, bs=1, minTrainImages=5):
+def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs, bs=1, minTrainImages=10):
     try:
         import dafne_dl.common.preprocess_train as pretrain 
         from dafne_dl.labels.chp import inverse_labels 
@@ -233,18 +255,22 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         import dl.common.preprocess_train as pretrain 
         from dl.labels.chp import inverse_labels 
 
+    import os
+    import gc
     import time
     import math
-    import pickle as pkl
+    # import pickle as pkl
     from tqdm import tqdm
     import torch
     import torch.distributed as dist
     import torchio.transforms as torchio_transforms
+    # from torch.amp import GradScaler, autocast
+    # import torch.utils.checkpoint as checkpoint
     from dafne.utils import compressed_pickle
-    import monai
+    # import monai
     import monai.transforms as monai_transforms
     from monai import losses
-    from monai.data import DataLoader, CacheDataset
+    from monai.data import DataLoader, MetaTensor, CacheDataset
     from monai.metrics import DiceMetric
     from monai.utils import set_determinism
     from monai.inferers import sliding_window_inference
@@ -255,20 +281,19 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     except:
         import numpy as np
 
-    torch.multiprocessing.set_sharing_strategy('file_system')
-
-    device = torch.device(f"cuda:{dist.get_rank()}") if torch.cuda.device_count() > 1 else torch.device("cuda:0")
-    torch.cuda.set_device(device)
-
-    set_determinism(seed=0)
+    # torch.cuda.empty_cache()
+    # gc.collect()
+    # torch.cuda.ipc_collect()  
     
+
     # validation
     def validation(epoch_iterator_val, global_step, model_, device, patch):
 
         patch = patch
         softmax = True
         output_classes = 2
-        overlap_ratio = 0.8
+        overlap_ratio = 0.5 #0.8
+        sw_batch_size = 1
 
         dice_metric = DiceMetric(include_background=False, reduction="mean")
 
@@ -291,15 +316,27 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
             for step, batch in enumerate(epoch_iterator_val):
 
                 val_inputs, val_labels = (batch["image"].to(device), batch["label"].to(device))
-                val_outputs = sliding_window_inference(val_inputs, patch, 4, model_, overlap=overlap_ratio)
+
+                # torch.cuda.empty_cache()
+                # gc.collect()
+
+                val_outputs = sliding_window_inference(val_inputs, patch, sw_batch_size, model_, overlap=overlap_ratio)
+
+                torch.cuda.empty_cache()
+                gc.collect()
+
                 val_labels_list = decollate_batch(val_labels)
                 val_labels_convert = [
                     post_label(val_label_tensor) for val_label_tensor in val_labels_list
                 ]
+                # val_labels_convert = post_label(val_labels)
+
                 val_outputs_list = decollate_batch(val_outputs)
                 val_output_convert = [
                     post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list
                 ]
+
+                # val_output_convert = post_pred(val_outputs)
 
                 #Dice
                 dice_metric(y_pred=val_output_convert, y=val_labels_convert)
@@ -310,6 +347,11 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 
                     "Validate (%d / %d Steps) (dice=%2.5f)" % (global_step, 10.0, dice) 
                 )
+                del val_inputs, val_labels, val_outputs,  val_labels_convert, val_output_convert, val_labels_list, val_outputs_list
+                
+                torch.cuda.empty_cache()
+                gc.collect()
+                # torch.cuda.ipc_collect()
             dice_metric.reset()
 
         mean_dice_val = np.mean(dice_vals)
@@ -321,17 +363,25 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     MODEL_RESOLUTION = np.array([1.0, 1.0, 1.0])
     MODEL_SIZE = (128,128,128)
     BATCH_SIZE = bs
-    BAND = 64
+    # BAND = 64
     MIN_TRAINING_IMAGES = minTrainImages
+
+    if modelObj.device.type == 'cpu':
+        device = 'cpu'
+    else:
+        if modelObj.device.index is not None:
+            device = modelObj.device.index
+        else:
+            device = 0
 
 
     t = time.time()
 
     train_transforms = monai_transforms.Compose(
         [
-            monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim='no_channel'),
+            monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim=0), #channel_dim='no_channel'
             monai_transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
-            monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=True),
+            monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=(True, True)),
             monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
             monai_transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
             monai_transforms.EnsureTyped(keys=["image", "label"]),
@@ -384,9 +434,9 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
     val_transforms = monai_transforms.Compose(
         [
-            monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim='no_channel'),
+            monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim=0), #  channel_dim='no_channel'
             monai_transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
-            monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=True),
+            monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=(True, True)),
             monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
             monai_transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
             monai_transforms.CastToTyped(keys=["image", "label"], dtype= (np.float32, np.uint8)),
@@ -395,6 +445,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
     image_list, mask_list = pretrain.common_input_process_ensemble(inverse_labels, MODEL_RESOLUTION, trainingData, trainingOutputs)
 
+    affine_list = trainingData['affine']
+
     print('Done. Elapsed', time.time() - t)
     nImages = len(image_list)
 
@@ -402,78 +454,82 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         print("Not enough images for training")
         return
 
-    print('Weight calculation')
-    t = time.time()
+    # print('Weight calculation')
+    # t = time.time()
 
     train_files=[]
     validation_files=[]
 
     jj=math.ceil(3*len(image_list)/4)
-    
+
     for kk in range(len(image_list)):
 
-        image=image_list[kk]
-        seg=mask_list[kk]
+            image=image_list[kk]
+            seg=mask_list[kk]
+            affine_=affine_list[kk]
 
-        if kk>jj:
-            validation_files.append({"image": image, "label": seg})
-        else:
-            train_files.append({"image": image, "label": seg})
+            if image.ndim == 3: 
+                image = np.expand_dims(image, axis=0)
+                seg = np.expand_dims(seg, axis=0)
+
+            if kk>jj:
+                validation_files.append({"image": MetaTensor(image, affine = affine_), "label": MetaTensor(seg, affine = affine_)})
+            else:
+                train_files.append({"image": MetaTensor(image, affine = affine_), "label": MetaTensor(seg, affine = affine_)})
     
-    print('Done. Elapsed', time.time() - t)
+    # print('Done. Elapsed', time.time() - t)
 
     print(f'Incremental learning for Choroid Plexus with {nImages} images')
     t = time.time()
     
+    
     train_ds = CacheDataset(
-            data=train_files,
-            transform=train_transforms,
-            cache_rate=float(torch.cuda.device_count()) / 4.0,
-            num_workers=8,
-            progress=False,
+        data=train_files, 
+        transform=train_transforms, 
+        cache_rate=float(torch.cuda.device_count()) / 4.0,
+        num_workers=8,
+        progress=False,
         )
-
     val_ds = CacheDataset(
-        data=validation_files,
-        transform=val_transforms,
+        data=validation_files, 
+        transform=val_transforms, 
         cache_rate=float(torch.cuda.device_count()) / 4.0,
         num_workers=2,
-        progress=False,
-    )
+        progress = False,
+        )
+    
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, num_workers=4, shuffle = True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, num_workers=4, shuffle = False)
 
-    train_loader = DataLoader(train_ds, num_workers=2, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_ds, num_workers=2, batch_size=BATCH_SIZE, shuffle=False)
-
+    torch.cuda.empty_cache()
+    gc.collect()
+    
     torch.backends.cudnn.benchmark = True
-
-    if modelObj.device.type == 'cpu':
-        device = 'cpu'
-    else:
-        if modelObj.device.index is not None:
-            device = modelObj.device.index
-        else:
-            device = 0
+    # torch.backends.cuda.matmul.allow_tf32 = True
 
     loss_function=losses.DiceCELoss(include_background=False,to_onehot_y=2, sigmoid=False)
 
-    max_iterations= 10000
-    num_iterations_per_validation= 100
+    max_iterations= 10 #10000
+    num_iterations_per_validation= 2 #100
     num_epochs_per_validation = num_iterations_per_validation // len(train_files)
     num_epochs_per_validation = max(num_epochs_per_validation, 1)
-    num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
+    # num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
 
     state_dicts=[]
 
     for ii in range(5):
+
+        set_determinism(seed=0)
         
-        print("Model load")
-        model_ = modelObj.model[ii]
+        print(f"Model {ii} load")
+
+        model_ = modelObj.model[ii].to(device)
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
         optimizer = torch.optim.AdamW(model_.parameters(), lr=0.0001, weight_decay= 1.0e-05) 
-
-        if torch.cuda.device_count() == 1 or dist.get_rank() == 0:
-            print("num_epochs", num_epochs)
-            print("num_epochs_per_validation", num_epochs_per_validation)
 
         # training
         global_step = 0
@@ -483,33 +539,65 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         while global_step < max_iterations: 
 
             model_.train()
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
             epoch_loss = 0
             step = 0
             epoch_iterator = tqdm(
                 train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True
             )
+
             for step, batch in enumerate(epoch_iterator):
 
                 step += 1
+                print(f'step {step}')
                 x, y = (batch["image"].to(device), batch["label"].to(device))
+                print('x and y')
+
+                torch.cuda.empty_cache()
+                gc.collect()
+                torch.cuda.ipc_collect()
+
                 logit_map = model_(x)
+                print('logit map')
                 loss = loss_function(logit_map, y) 
+                print(torch.cuda.memory_summary())
+                # logit_map = model_(x)
+                # loss = loss_function(logit_map, y) 
+                print('loss')
+
                 loss.backward()
+                print('loss backward')
+
+
                 epoch_loss += loss.item()
+                print('epoch loss')
+
+                del loss, logit_map, x, y
+
                 optimizer.step()
+
+                print('optimizer')
                 optimizer.zero_grad()
                 epoch_iterator.set_description(
                     "Training (%d / %d Steps) (loss=%2.5f)" % (global_step, max_iterations, loss)
                 )
+
                 if (
                     global_step % num_iterations_per_validation == 0 and global_step != 0
                 ) or global_step == max_iterations:
                     epoch_iterator_val = tqdm(
                         val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True
                     )
-                    
+
                     dice_val=validation(epoch_iterator_val, global_step, model_, device, MODEL_SIZE)
                     epoch_loss /= step
+
+
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    # torch.cuda.ipc_collect()
                     
                     if (dice_val > dice_val_best) : 
                         
@@ -519,13 +607,28 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                         last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
 
                         print(
-                            f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
+                            f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f} \n"
+                        )
+                    else:
+                        print(
+                            f"Model Was Not Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
                         )
 
                 global_step += 1
+                
+                torch.cuda.empty_cache()
+                gc.collect()
+                # torch.cuda.ipc_collect()
+        
+        del optimizer, model_
+        
+        torch.cuda.empty_cache()
+        gc.collect()
+        # torch.cuda.ipc_collect()
 
         new_state_dict = compressed_pickle.loads(last_good_weights)
         state_dicts.append(new_state_dict)
+
 
     print('Done. Elapsed', time.time() - t)  
 
@@ -541,6 +644,22 @@ metadata = {
     'description': 'This model segments Choroid Plexus from T1-w MRI images based on ASCHOPLEX.',
 }
 
+info_json = {
+    'categories': ['CHP'],
+    'variants': [""],
+    'dimensionality': "3",
+    'model_name': 'aschoplex',
+    'type': 'DynamicEnsembleModel',
+    'info': {
+        'Description': 'ASCHOPLEX: automatic segmentation of Choroid Plexus model',
+        'Author':	'Visani Valentina',
+        'Modality': 'MRI',
+        'Orientation': '', #'Axial',
+        "Link": '',
+    },
+    }
+    
+
 generate_convert(model_id='e2bb676f-6e8e-45b8-b5d7-542ef8f3e542',
                  default_weights_path='weights',
                  model_name_prefix='aschoplex',
@@ -549,5 +668,6 @@ generate_convert(model_id='e2bb676f-6e8e-45b8-b5d7-542ef8f3e542',
                  model_learn_function=ensemble_incremental_learning,
                  dimensionality=3,
                  model_type=DynamicEnsembleModel,
-                 metadata=metadata
+                 metadata=metadata,
+                 info_json = info_json
                  )

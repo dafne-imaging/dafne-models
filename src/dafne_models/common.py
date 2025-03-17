@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import json
 
 from dafne_dl import DynamicDLModel
 
@@ -13,7 +14,8 @@ def generate_convert(model_id,
                      model_learn_function,
                      dimensionality=2,
                      model_type=DynamicDLModel,
-                     metadata=None):
+                     metadata=None,
+                     info_json=None):
     """
     Function that either generates a new model using the default weights, or updates an existing model, based on argv[1]
 
@@ -27,6 +29,7 @@ def generate_convert(model_id,
         dimensionality: the dimensionality of the data (2 or 3)
         model_type: the type of the model (e.g. DynamicDLModel or DynamicTorchModel or DynamicEnsembleModel)
         metadata: additional metadata to be stored in the model
+        info_json: information on the model to be stored in a json file
 
     Returns:
         None
@@ -86,3 +89,20 @@ def generate_convert(model_id,
         pass
 
     print('Saved', filename)
+
+    if info_json:
+
+        print(info_json)
+
+        try:
+            if 'model_name' in info_json: 
+                json_file_name = f'models/{info_json['model_name']}.json'
+
+                with open(json_file_name, 'w', encoding='utf-8') as f:
+                    json.dump(info_json, f, ensure_ascii=False, indent=4)
+
+                print('Saved', json_file_name)
+
+        except FileNotFoundError:
+            pass
+
