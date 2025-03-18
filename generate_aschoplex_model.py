@@ -649,7 +649,7 @@ info_json = {
     'variants': [""],
     'dimensionality': "3",
     'model_name': 'aschoplex',
-    'type': 'DynamicEnsembleModel',
+    'model_type': 'DynamicEnsembleModel',
     'info': {
         'Description': 'ASCHOPLEX: automatic segmentation of Choroid Plexus model',
         'Author':	'Visani Valentina',
