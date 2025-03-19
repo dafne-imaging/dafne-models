@@ -382,6 +382,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
             monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim=0), #channel_dim='no_channel'
             monai_transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
             monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=(True, True)),
+            monai_transforms.SpatialPadd(keys=["image", "label"], spatial_size=MODEL_SIZE),
             monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
             monai_transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
             monai_transforms.EnsureTyped(keys=["image", "label"]),
@@ -555,6 +556,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 step += 1
                 print(f'step {step}')
                 x, y = (batch["image"].to(device), batch["label"].to(device))
+                print('x shape: ', x.shape)
+                print('y shape: ', y.shape)
                 print('x and y')
 
                 torch.cuda.empty_cache()
