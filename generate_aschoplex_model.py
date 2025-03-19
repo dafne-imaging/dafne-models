@@ -284,6 +284,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     # torch.cuda.empty_cache()
     # gc.collect()
     # torch.cuda.ipc_collect()  
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:native,max_split_size_mb:32,expandable_segments:True"
     
 
     # validation
@@ -556,8 +557,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 step += 1
                 print(f'step {step}')
                 x, y = (batch["image"].to(device), batch["label"].to(device))
-                print('x shape: ', x.shape)
-                print('y shape: ', y.shape)
+                # print('x shape: ', x.shape)
+                # print('y shape: ', y.shape)
                 print('x and y')
 
                 torch.cuda.empty_cache()
@@ -567,7 +568,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 logit_map = model_(x)
                 print('logit map')
                 loss = loss_function(logit_map, y) 
-                print(torch.cuda.memory_summary())
+                # print(torch.cuda.memory_summary())
                 # logit_map = model_(x)
                 # loss = loss_function(logit_map, y) 
                 print('loss')
@@ -588,6 +589,11 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 epoch_iterator.set_description(
                     "Training (%d / %d Steps) (loss=%2.5f)" % (global_step, max_iterations, loss)
                 )
+
+                del loss
+
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
 
                 if (
                     global_step % num_iterations_per_validation == 0 and global_step != 0
