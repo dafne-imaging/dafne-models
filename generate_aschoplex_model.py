@@ -579,7 +579,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 epoch_loss += loss.item()
                 print('epoch loss')
 
-                del loss, logit_map, x, y
+                del logit_map, x, y
 
                 optimizer.step()
 
