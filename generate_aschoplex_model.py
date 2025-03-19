@@ -465,7 +465,9 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     for kk in range(len(image_list)):
 
             image=image_list[kk]
+            print('image shape: ', image.shape)
             seg=mask_list[kk]
+            print('seg shape: ', seg.shape)
             affine_=affine_list[kk]
 
             if image.ndim == 3: 
