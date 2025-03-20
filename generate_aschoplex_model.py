@@ -264,7 +264,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     import torch
     import torch.distributed as dist
     import torchio.transforms as torchio_transforms
-    # from torch.amp import GradScaler, autocast
+    from torch.amp import GradScaler, autocast
     # import torch.utils.checkpoint as checkpoint
     from dafne.utils import compressed_pickle
     # import monai
@@ -285,16 +285,91 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     # gc.collect()
     # torch.cuda.ipc_collect()  
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:native,max_split_size_mb:32,expandable_segments:True"
+
+    set_determinism(seed=0)
     
 
+    # # validation
+    # def validation(epoch_iterator_val, global_step, model_, device, patch):
+
+    #     patch = patch
+    #     softmax = True
+    #     output_classes = 2
+    #     overlap_ratio = 0.5 #0.8
+    #     sw_batch_size = 1
+
+    #     dice_metric = DiceMetric(include_background=False, reduction="mean")
+
+
+    #     # post transforms
+    #     if softmax:
+    #         post_pred = monai_transforms.Compose(
+    #             [monai_transforms.EnsureType(), monai_transforms.AsDiscrete(argmax=True, to_onehot=output_classes)]
+    #         )
+    #         post_label = monai_transforms.Compose([monai_transforms.EnsureType(), monai_transforms.AsDiscrete(to_onehot=output_classes)])
+    #     else:
+    #         post_pred = monai_transforms.Compose(
+    #             [monai_transforms.EnsureType(), monai_transforms.Activations(sigmoid=True), monai_transforms.AsDiscrete(threshold=0.5)]
+    #         )
+
+    #     model_.eval()
+    #     dice_vals = list()
+
+    #     with torch.no_grad():
+    #         for step, batch in enumerate(epoch_iterator_val):
+
+    #             val_inputs, val_labels = (batch["image"].to(device), batch["label"].to(device))
+
+    #             # torch.cuda.empty_cache()
+    #             # gc.collect()
+
+    #             val_outputs = sliding_window_inference(val_inputs, patch, sw_batch_size, model_, overlap=overlap_ratio)
+
+    #             torch.cuda.empty_cache()
+    #             gc.collect()
+
+    #             val_labels_list = decollate_batch(val_labels)
+    #             val_labels_convert = [
+    #                 post_label(val_label_tensor) for val_label_tensor in val_labels_list
+    #             ]
+    #             # val_labels_convert = post_label(val_labels)
+
+    #             val_outputs_list = decollate_batch(val_outputs)
+    #             val_output_convert = [
+    #                 post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list
+    #             ]
+
+    #             # val_output_convert = post_pred(val_outputs)
+
+    #             #Dice
+    #             dice_metric(y_pred=val_output_convert, y=val_labels_convert)
+    #             dice = dice_metric.aggregate().item()
+    #             dice_vals.append(dice)
+
+    #             epoch_iterator_val.set_description(
+                
+    #                 "Validate (%d / %d Steps) (dice=%2.5f)" % (global_step, 10.0, dice) 
+    #             )
+    #             del val_inputs, val_labels, val_outputs,  val_labels_convert, val_output_convert, val_labels_list, val_outputs_list
+                
+    #             torch.cuda.empty_cache()
+    #             gc.collect()
+    #             # torch.cuda.ipc_collect()
+    #         dice_metric.reset()
+
+    #     mean_dice_val = np.mean(dice_vals)
+
+    #     metrics_values=mean_dice_val
+        
+    #     return metrics_values  
+
     # validation
-    def validation(epoch_iterator_val, global_step, model_, device, patch):
+    def validation(val_loader, global_step, model_, device, patch):
 
         patch = patch
         softmax = True
         output_classes = 2
-        overlap_ratio = 0.5 #0.8
-        sw_batch_size = 1
+        overlap_ratio = 0.5
 
         dice_metric = DiceMetric(include_background=False, reduction="mean")
 
@@ -313,18 +388,22 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         model_.eval()
         dice_vals = list()
 
-        with torch.no_grad():
-            for step, batch in enumerate(epoch_iterator_val):
+        with torch.autograd.set_grad_enabled(False):
+        # with torch.no_grad(), torch.set_grad_enabled(False), torch.amp.autocast("cuda"):
+            for batch in val_loader:
 
                 val_inputs, val_labels = (batch["image"].to(device), batch["label"].to(device))
 
-                # torch.cuda.empty_cache()
-                # gc.collect()
+                torch.cuda.empty_cache()
+                gc.collect()
 
-                val_outputs = sliding_window_inference(val_inputs, patch, sw_batch_size, model_, overlap=overlap_ratio)
+                with torch.no_grad():
+
+                    val_outputs["pred"] = sliding_window_inference(val_inputs, patch, 1, model_, overlap=overlap_ratio)
 
                 torch.cuda.empty_cache()
                 gc.collect()
+                # torch.cuda.ipc_collect()
 
                 val_labels_list = decollate_batch(val_labels)
                 val_labels_convert = [
@@ -344,15 +423,10 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 dice = dice_metric.aggregate().item()
                 dice_vals.append(dice)
 
-                epoch_iterator_val.set_description(
-                
-                    "Validate (%d / %d Steps) (dice=%2.5f)" % (global_step, 10.0, dice) 
-                )
                 del val_inputs, val_labels, val_outputs,  val_labels_convert, val_output_convert, val_labels_list, val_outputs_list
                 
                 torch.cuda.empty_cache()
                 gc.collect()
-                # torch.cuda.ipc_collect()
             dice_metric.reset()
 
         mean_dice_val = np.mean(dice_vals)
@@ -445,6 +519,11 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         ]
     )
 
+    post_pred = monai_transforms.Compose(
+        [monai_transforms.EnsureType(), monai_transforms.AsDiscrete(argmax=True, to_onehot=2)]
+    )
+    post_label = monai_transforms.Compose([monai_transforms.EnsureType(), monai_transforms.AsDiscrete(to_onehot=2)])
+
     image_list, mask_list = pretrain.common_input_process_ensemble(inverse_labels, MODEL_RESOLUTION, trainingData, trainingOutputs)
 
     affine_list = trainingData['affine']
@@ -509,15 +588,146 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     gc.collect()
     
     torch.backends.cudnn.benchmark = True
-    # torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    # loss_function=losses.DiceCELoss(include_background=False,to_onehot_y=2, sigmoid=False)
+
+    # max_iterations= 10 #10000
+    # num_iterations_per_validation= 2 #100
+    # num_epochs_per_validation = num_iterations_per_validation // len(train_files)
+    # num_epochs_per_validation = max(num_epochs_per_validation, 1)
+    # # num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
+
+    # state_dicts=[]
+
+    # for ii in range(5):
+
+    #     set_determinism(seed=0)
+        
+    #     print(f"Model {ii} load")
+
+    #     model_ = modelObj.model[ii].to(device)
+
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
+    #     torch.cuda.ipc_collect()
+
+    #     optimizer = torch.optim.AdamW(model_.parameters(), lr=0.0001, weight_decay= 1.0e-05) 
+
+    #     # training
+    #     global_step = 0
+    #     dice_val_best = 0.0
+    #     global_step_best = 0
+
+    #     while global_step < max_iterations: 
+
+    #         model_.train()
+    #         gc.collect()
+    #         torch.cuda.empty_cache()
+    #         torch.cuda.ipc_collect()
+    #         epoch_loss = 0
+    #         step = 0
+    #         epoch_iterator = tqdm(
+    #             train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True
+    #         )
+
+    #         for step, batch in enumerate(epoch_iterator):
+
+    #             step += 1
+    #             print(f'step {step}')
+    #             x, y = (batch["image"].to(device), batch["label"].to(device))
+    #             # print('x shape: ', x.shape)
+    #             # print('y shape: ', y.shape)
+    #             print('x and y')
+
+    #             torch.cuda.empty_cache()
+    #             gc.collect()
+    #             torch.cuda.ipc_collect()
+
+    #             logit_map = model_(x)
+    #             print('logit map')
+    #             loss = loss_function(logit_map, y) 
+    #             # print(torch.cuda.memory_summary())
+    #             # logit_map = model_(x)
+    #             # loss = loss_function(logit_map, y) 
+    #             print('loss')
+
+    #             loss.backward()
+    #             print('loss backward')
+
+
+    #             epoch_loss += loss.item()
+    #             print('epoch loss')
+
+    #             del logit_map, x, y
+
+    #             optimizer.step()
+
+    #             print('optimizer')
+    #             optimizer.zero_grad()
+    #             epoch_iterator.set_description(
+    #                 "Training (%d / %d Steps) (loss=%2.5f)" % (global_step, max_iterations, loss)
+    #             )
+
+    #             del loss
+
+    #             torch.cuda.empty_cache()
+    #             torch.cuda.ipc_collect()
+
+    #             if (
+    #                 global_step % num_iterations_per_validation == 0 and global_step != 0
+    #             ) or global_step == max_iterations:
+    #                 epoch_iterator_val = tqdm(
+    #                     val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True
+    #                 )
+
+    #                 dice_val=validation(epoch_iterator_val, global_step, model_, device, MODEL_SIZE)
+    #                 epoch_loss /= step
+
+
+    #                 torch.cuda.empty_cache()
+    #                 gc.collect()
+    #                 # torch.cuda.ipc_collect()
+                    
+    #                 if (dice_val > dice_val_best) : 
+                        
+    #                     dice_val_best = dice_val
+    #                     global_step_best = global_step
+
+    #                     last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
+
+    #                     print(
+    #                         f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f} \n"
+    #                     )
+    #                 else:
+    #                     print(
+    #                         f"Model Was Not Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
+    #                     )
+
+    #             global_step += 1
+                
+    #             torch.cuda.empty_cache()
+    #             gc.collect()
+    #             # torch.cuda.ipc_collect()
+        
+    #     del optimizer, model_
+        
+    #     torch.cuda.empty_cache()
+    #     gc.collect()
+    #     # torch.cuda.ipc_collect()
+
+    #     new_state_dict = compressed_pickle.loads(last_good_weights)
+    #     state_dicts.append(new_state_dict)
 
     loss_function=losses.DiceCELoss(include_background=False,to_onehot_y=2, sigmoid=False)
+    dice_metric = DiceMetric(include_background=False, reduction="mean")
 
     max_iterations= 10 #10000
     num_iterations_per_validation= 2 #100
     num_epochs_per_validation = num_iterations_per_validation // len(train_files)
     num_epochs_per_validation = max(num_epochs_per_validation, 1)
-    # num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
+    num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
+
 
     state_dicts=[]
 
@@ -529,91 +739,149 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
         model_ = modelObj.model[ii].to(device)
 
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        # scaler
+        scaler = GradScaler("cuda")
 
+        print("num_epochs", num_epochs)
+        print("num_epochs_per_validation", num_epochs_per_validation)
+
+        # optimizer
         optimizer = torch.optim.AdamW(model_.parameters(), lr=0.0001, weight_decay= 1.0e-05) 
 
         # training
+        val_interval = num_epochs_per_validation
         global_step = 0
         dice_val_best = 0.0
-        global_step_best = 0
+        global_step_best = -1
 
-        while global_step < max_iterations: 
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        for epoch in range(num_epochs):
+
+        # while global_step < max_iterations: 
+            print("-" * 10)
+            print(f"epoch {epoch + 1}/{num_epochs}")
 
             model_.train()
             gc.collect()
             torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-            epoch_loss = 0
-            step = 0
-            epoch_iterator = tqdm(
-                train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True
-            )
 
-            for step, batch in enumerate(epoch_iterator):
+            epoch_loss = 0
+            loss_torch = torch.zeros(2, dtype=torch.float, device=device)
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            step = 0
+
+            # epoch_iterator = tqdm(
+            #     train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True
+            # )
+
+            # accumulation_steps = 4  # Numero di passaggi da accumulare prima di fare una retropropagazione
+
+            optimizer.zero_grad()  # Azzera i gradienti iniziali
+            # scaler = GradScaler("cuda")
+            torch.cuda.empty_cache()
+            gc.collect()
+            torch.cuda.ipc_collect()
+            
+            for batch_data in train_loader:
+            # for step, batch in enumerate(epoch_iterator):
 
                 step += 1
                 print(f'step {step}')
-                x, y = (batch["image"].to(device), batch["label"].to(device))
-                # print('x shape: ', x.shape)
-                # print('y shape: ', y.shape)
-                print('x and y')
-
+                inputs, labels = batch_data["image"].to(device), batch_data["label"].to(device)
                 torch.cuda.empty_cache()
                 gc.collect()
                 torch.cuda.ipc_collect()
 
-                logit_map = model_(x)
-                print('logit map')
-                loss = loss_function(logit_map, y) 
-                # print(torch.cuda.memory_summary())
-                # logit_map = model_(x)
-                # loss = loss_function(logit_map, y) 
-                print('loss')
+                for param in model_.parameters():
+                    param.grad = None
 
-                loss.backward()
-                print('loss backward')
-
-
-                epoch_loss += loss.item()
-                print('epoch loss')
-
-                del logit_map, x, y
-
-                optimizer.step()
-
-                print('optimizer')
-                optimizer.zero_grad()
-                epoch_iterator.set_description(
-                    "Training (%d / %d Steps) (loss=%2.5f)" % (global_step, max_iterations, loss)
-                )
-
-                del loss
-
+                print('model_params')
+                
                 torch.cuda.empty_cache()
+                gc.collect()
                 torch.cuda.ipc_collect()
 
-                if (
-                    global_step % num_iterations_per_validation == 0 and global_step != 0
-                ) or global_step == max_iterations:
-                    epoch_iterator_val = tqdm(
-                        val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True
-                    )
+                
+                with torch.amp.autocast('cuda'):
+                    print('enter')
+                    outputs = model_(inputs)
+                    print('logit map')
+                    loss = loss_function(outputs.float(), labels) 
+                    print('loss')
+                
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model_.parameters(), 0.5)
+                scaler.step(optimizer)
+                scaler.update()
 
-                    dice_val=validation(epoch_iterator_val, global_step, model_, device, MODEL_SIZE)
-                    epoch_loss /= step
+                epoch_loss += loss.item()
+                loss_torch[0] += loss.item()
+                loss_torch[1] += 1.0
+                epoch_len = len(train_loader)
 
+                global_step += 1
+
+                print(f"{step}/{epoch_len}, train_loss: {loss.item():.4f}")
+
+                # loss_torch = loss_torch.tolist()
+                # loss_torch_epoch = loss_torch[0] / loss_torch[1]
+                
+                loss_torch_list = loss_torch.tolist()
+
+                loss_torch_epoch = loss_torch_list[0] / loss_torch_list[1]
+
+                print(
+                    f"epoch {epoch + 1} average loss: {loss_torch_epoch:.4f}, "
+                    f"best mean dice: {dice_val_best:.4f} at epoch {global_step_best}"
+                )
+
+                if (epoch + 1) % val_interval == 0 or (epoch + 1) == num_epochs:
 
                     torch.cuda.empty_cache()
-                    gc.collect()
-                    # torch.cuda.ipc_collect()
+                    model_.eval()
+
+                    with torch.no_grad():
+                        _index = 0
+                        dice_vals = list()
+
+                        for val_data in val_loader:
+
+                            val_images = val_data["image"].to(device)
+                            val_labels = val_data["label"].to(device)
+                            
+                            with torch.amp.autocast('cuda'):
+                                val_outputs = sliding_window_inference(
+                                    val_images,
+                                    MODEL_SIZE,
+                                    1,
+                                    model_,
+                                    overlap=0.5,
+                                )
+                            val_outputs = post_pred(val_outputs[0, ...])
+                            val_outputs = val_outputs[None, ...]
+                            val_labels = post_label(val_labels[0, ...])
+                            val_labels = val_labels[None, ...]
+
+                            dice_metric(y_pred=val_outputs, y=val_labels)
+                            dice = dice_metric.aggregate().item()
+                            dice_vals.append(dice)
+
+                            _index += 1
+                        dice_metric.reset()
+                    dice_val = np.mean(dice_vals)
+
+                    # dice_val=validation(val_loader, global_step, model_, device, MODEL_SIZE)
                     
                     if (dice_val > dice_val_best) : 
                         
                         dice_val_best = dice_val
-                        global_step_best = global_step
+                        global_step_best = epoch +1 
 
                         last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
 
@@ -624,21 +892,26 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                         print(
                             f"Model Was Not Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
                         )
-
-                global_step += 1
+                    print(
+                        "current epoch: {} current mean dice: {:.4f} best mean dice: {:.4f} at epoch {}".format(
+                            epoch + 1, dice_val, dice_val_best, global_step_best
+                        )
+                    )
                 
                 torch.cuda.empty_cache()
-                gc.collect()
-                # torch.cuda.ipc_collect()
-        
+               
         del optimizer, model_
+        print(f"train completed, best Dice metric: {dice_val_best:.4f} at epoch: {global_step_best}")
         
         torch.cuda.empty_cache()
         gc.collect()
-        # torch.cuda.ipc_collect()
+
 
         new_state_dict = compressed_pickle.loads(last_good_weights)
         state_dicts.append(new_state_dict)
+
+        
+        torch.cuda.empty_cache()
 
 
     print('Done. Elapsed', time.time() - t)  
