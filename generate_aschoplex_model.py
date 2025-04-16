@@ -28,14 +28,20 @@ from dafne_dl.DynamicEnsembleModel import DynamicEnsembleModel
 def init_folds():
     from monai.networks.nets import SwinUNETR, UNETR, DynUNet
 
-    model_fold0 = SwinUNETR(
-        feature_size= 48,
+    model_fold0 = UNETR(
+        feature_size= 16,
         img_size=(128,128,128),
         in_channels=1,
         out_channels=2,
-        spatial_dims= 3,
-        use_checkpoint= False,
-        use_v2= False,
+        # spatial_dims: 3
+        hidden_size= 768,
+        mlp_dim= 3072,
+        num_heads= 12,
+        proj_type= "conv",
+        norm_name= "instance",
+        res_block= True,
+        dropout_rate= 0.0,
+        # use_checkpoint: True
     )
 
     model_fold1 = DynUNet(
@@ -203,7 +209,7 @@ def ensemble_apply(modelObj, data: dict):
 
             with torch.no_grad():
 
-                test_data["pred"] = sliding_window_inference(test_input, roi_size, sw_batch_size, model_load, mode="gaussian", overlap=0.5)
+                test_data["pred"] = sliding_window_inference(test_input, roi_size, sw_batch_size, model_load, mode="gaussian", overlap=0.8)
                 print("Model applied")
 
             # Post-processing
@@ -263,6 +269,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     from monai.metrics import DiceMetric
     from monai.utils import set_determinism
     from monai.inferers import sliding_window_inference
+    import io
 
     try:
         np
@@ -298,36 +305,6 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
             monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
             monai_transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
             monai_transforms.EnsureTyped(keys=["image", "label"]),
-            # monai_transforms.RandBiasFieldd(keys=["image"], degree=3, prob=0.15),
-            # monai_transforms.RandGibbsNoised(keys=["image"], prob=0.15),
-            # torchio_transforms.RandomMotion(
-            #     include=["image"], 
-            #     label_keys=["label"], 
-            #     degrees=10, 
-            #     translation=10, 
-            #     num_transforms=2, 
-            #     image_interpolation=("linear"), 
-            #     p=0.3
-            # ),
-            # torchio_transforms.RandomElasticDeformation(
-            #     include=["image"], 
-            #     label_keys=["label"], 
-            #     num_control_points= 7,
-            #     max_displacement= 7.5,
-            #     locked_borders= 2,
-            #     image_interpolation=("linear"),
-            #     label_interpolation=("nearest"),
-            #     p=0.3
-            # ),
-            # torchio_transforms.RandomGhosting(
-            #     include=["image"], 
-            #     label_keys=["label"], 
-            #     num_ghosts= 10,
-            #     axes= [0, 1, 2],
-            #     intensity= [0.5, 1],
-            #     restore= 0.2,
-            #     p= 0.3
-            # ),
             monai_transforms.RandFlipd(keys=["image", "label"], prob=0.15, spatial_axis=0),
             monai_transforms.RandFlipd(keys=["image", "label"], prob=0.15, spatial_axis=1),
             monai_transforms.RandFlipd(keys=["image", "label"], prob=0.15, spatial_axis=2),
@@ -418,23 +395,21 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     torch.cuda.empty_cache()
     gc.collect()
     
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.benchmark = False #True
+    torch.backends.cuda.matmul.allow_tf32 = False #True
 
     loss_function=losses.DiceCELoss(include_background=False,to_onehot_y=True, sigmoid=False, softmax=True, squared_pred=True, smooth_dr=1.0e-06, smooth_nr=0, batch=True)
 
     dice_metric = DiceMetric(include_background=False, reduction="mean")
 
-    max_iterations= 2000 #20000
-    num_iterations_per_validation= 10 #100
+    max_iterations= 4000
+    num_iterations_per_validation= 10
     num_epochs_per_validation = num_iterations_per_validation // len(train_files)
     num_epochs_per_validation = max(num_epochs_per_validation, 1)
     num_epochs = num_epochs_per_validation * (max_iterations // num_iterations_per_validation)
 
-
-    state_dicts=[]
-
-    for ii in range(5):
+   
+    for ii in range(3):
 
         set_determinism(seed=0)
         
@@ -452,8 +427,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         optimizer = torch.optim.AdamW(model_.parameters(), lr=0.0001, weight_decay= 1.0e-05) 
         lr_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer=optimizer,
-            step_size=max_iterations // 5,  # Step ogni 1/5 delle iterazioni totali
-            gamma=0.5  # Fattore di riduzione del learning rate
+            step_size=max_iterations // 5, 
+            gamma=0.5  
         )
 
         # training
@@ -530,6 +505,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
                 lr_scheduler.step()
 
+                del  inputs, labels, outputs, loss
+
             loss_torch_list = loss_torch.tolist()
 
             loss_torch_epoch = loss_torch_list[0] / loss_torch_list[1]
@@ -539,7 +516,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                 f"best mean dice: {dice_val_best:.4f} at epoch {global_step_best}"
             )
 
-            del inputs, labels, outputs, loss, loss_torch_epoch, loss_torch_list
+            del loss_torch_epoch, loss_torch_list
 
             torch.cuda.empty_cache()
 
@@ -563,7 +540,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                                 MODEL_SIZE,
                                 1,
                                 model_,
-                                overlap=0.5,
+                                overlap=0.8,
                             )
                         val_outputs = post_pred(val_outputs[0, ...])
                         val_outputs = val_outputs[None, ...]
@@ -589,7 +566,10 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                         dice_val_best = dice_val
                         global_step_best = epoch +1 
 
-                        last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
+                        
+                        # last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
+                        last_good_weights = io.BytesIO()
+                        torch.save(model_.state_dict(), last_good_weights)
 
                         print(
                             f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f} \n"
@@ -605,27 +585,31 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
                     )
                 
                 torch.cuda.empty_cache()
-               
-        del optimizer, model_
-        print(f"train completed, best Dice metric: {dice_val_best:.4f} at epoch: {global_step_best}")
         
+        with torch.no_grad():    
+               
+            del optimizer, model_, scaler
+            print(f"train completed, best Dice metric: {dice_val_best:.4f} at epoch: {global_step_best}")
+            
+            torch.cuda.empty_cache()
+            gc.collect()
+            torch.cuda.ipc_collect()
+
+
+            # new_state_dict = compressed_pickle.loads(last_good_weights)
+            last_good_weights.seek(0)
+            new_state_dict = torch.load(last_good_weights, map_location=torch.device('cuda:0'))
+            modelObj.model[ii].load_state_dict(new_state_dict)
+            # state_dicts.append(new_state_dict)
+
+            del new_state_dict, last_good_weights, lr_scheduler
+
         torch.cuda.empty_cache()
         gc.collect()
-
-
-        new_state_dict = compressed_pickle.loads(last_good_weights)
-        state_dicts.append(new_state_dict)
-
-        del new_state_dict, last_good_weights
-
-        torch.cuda.empty_cache()
-        gc.collect()
+        torch.cuda.ipc_collect()
 
 
     print('Done. Elapsed', time.time() - t)  
-
-    for ii in range(0, len(state_dicts)):
-        modelObj.model[ii].load_state_dict(state_dicts[ii])
 
 
 metadata = {
