@@ -106,3 +106,29 @@ def generate_convert(model_id,
         except FileNotFoundError:
             pass
 
+def save_weights_torch(model_id,
+                       model_path,
+                       final_weights_path,
+                       model_type=DynamicDLModel):
+    """
+    Function that extracts and save the weigths of an existing model.
+    """
+    import torch
+
+    print("Converting model", model_path)
+    old_model_path = model_path
+    old_model = model_type.Load(open(old_model_path, 'rb'))
+    shutil.copyfile(old_model_path, old_model_path + '.bak')
+    weights = old_model.get_weights()
+    save_model="best_metric_model.pt"
+    timestamp = old_model.timestamp_id
+    model_id = old_model.model_id
+
+    for fold in range(len(weights)):
+        save_path=os.path.join(final_weights_path,'{m}_{t}'.format(m=model_id, t=timestamp), 'fold_{f}'.format(f=fold))
+        if not os.path.isdir(save_path):
+            os.makedirs(save_path)
+        torch.save(weights[fold], os.path.join(save_path, save_model))
+    
+    print('Saved Weights')
+
