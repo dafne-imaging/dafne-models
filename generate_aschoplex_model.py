@@ -560,6 +560,10 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
                     del dice_vals
                     torch.cuda.empty_cache()
+
+                    if (epoch + 1) == 1:
+                        last_good_weights = io.BytesIO()
+                        torch.save(model_.state_dict(), last_good_weights)
                     
                     if (dice_val > dice_val_best) : 
                         
