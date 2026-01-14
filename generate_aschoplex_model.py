@@ -632,7 +632,7 @@ info_json = {
     'model_type': 'DynamicEnsembleModel',
     'info': {
         'Description': 'ASCHOPLEX: automatic segmentation of Choroid Plexus model',
-        'Author':	'Visani Valentina',
+        'Author':	'BAMM group',
         'Modality': 'MRI',
         'Orientation': '', #'Axial',
         "Link": '',
