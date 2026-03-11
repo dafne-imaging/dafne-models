@@ -470,9 +470,6 @@ def leg_incremental_mem(modelObj: DynamicDLModel, trainingData: dict, trainingOu
     print('Done. Elapsed', time.time() - t)
 
 metadata = {
-}
-
-info_json = {
     'categories': [["MSK", "Muscle", "Lower limbs"]],
     'variants': ["", "Left", "Right"],
     'dimensionality': "2",
@@ -485,7 +482,7 @@ info_json = {
         'Orientation': 'Axial',
         "Link": "https://dafne.network/",
     },
-    }
+}
 
 generate_convert(model_id='ba333b4d-90e7-4108-aca5-9216f408d91e',
                  default_weights_path=os.path.join('weights', 'weights_gamba_split.hdf5'),
@@ -495,6 +492,5 @@ generate_convert(model_id='ba333b4d-90e7-4108-aca5-9216f408d91e',
                  model_learn_function=leg_incremental_mem,
                  dimensionality=2,
                  model_type=DynamicDLModel,
-                 metadata=metadata,
-                 info_json = info_json
+                 metadata=metadata
                  )

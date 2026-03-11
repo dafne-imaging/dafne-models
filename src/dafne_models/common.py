@@ -5,6 +5,26 @@ import json
 
 from dafne_dl import DynamicDLModel
 
+def _is_tf_model(model):
+    if hasattr(model, 'load_weights'):
+        return True
+    return False
+
+def _is_tf_ensemble_model(model):
+    if isinstance(model, list) and all(hasattr(m, 'load_weights') for m in model):
+        return True
+    return False
+
+def _is_torch_model(model):
+    if hasattr(model, 'load_state_dict'):
+        return True
+    return False
+
+def _is_torch_ensemble_model(model):
+    if isinstance(model, list) and all(hasattr(m, 'load_state_dict') for m in model):
+        return True
+    return False
+
 
 def generate_convert(model_id,
                      default_weights_path,
@@ -14,8 +34,7 @@ def generate_convert(model_id,
                      model_learn_function,
                      dimensionality=2,
                      model_type=DynamicDLModel,
-                     metadata=None,
-                     info_json=None):
+                     metadata=None):
     """
     Function that either generates a new model using the default weights, or updates an existing model, based on argv[1]
 
@@ -29,11 +48,12 @@ def generate_convert(model_id,
         dimensionality: the dimensionality of the data (2 or 3)
         model_type: the type of the model (e.g. DynamicDLModel or DynamicTorchModel or DynamicEnsembleModel)
         metadata: additional metadata to be stored in the model
-        info_json: information on the model to be stored in a json file
 
     Returns:
         None
     """
+    if not metadata:
+        metadata = {}
     if len(sys.argv) > 1:
         # convert an existing model
         print("Converting model", sys.argv[1])
@@ -48,25 +68,30 @@ def generate_convert(model_id,
         model_id = model_id
         timestamp = 1610001000
         model = model_create_function()
-        try:
+        if _is_tf_model(model):
             model.load_weights(default_weights_path)
             weights = model.get_weights()
-        except AttributeError:
-            # model is pytorch, not keras
-            try:
-                import torch
-                from dafne_dl.misc import torch_apply_fn_to_state_1
-                model.load_state_dict(torch.load(default_weights_path, weights_only=True, map_location=torch.device('cpu')))
-                weights = torch_apply_fn_to_state_1(model.state_dict(), lambda x: x.clone())
-            except AttributeError:
-                # model is Ensemble pytorch
-                import torch
-                from dafne_dl.misc import torch_apply_fn_to_state_1
-                weights=[]
-                for ii in range(len(model)):
-                    model[ii].load_state_dict(torch.load(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.pt'), weights_only=True, map_location=torch.device('cpu')))
-                    weight = torch_apply_fn_to_state_1(model[ii].state_dict(), lambda x: x.clone())
-                    weights.append(weight)
+        elif _is_tf_ensemble_model(model):
+            # model is Ensemble tf
+            weights=[]
+            for ii in range(len(model)):
+                model[ii].load_weights(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.h5'))
+                weight = model[ii].get_weights()
+                weights.append(weight)
+        elif _is_torch_model(model):
+            import torch
+            from dafne_dl.misc import torch_apply_fn_to_state_1
+            model.load_state_dict(torch.load(default_weights_path, weights_only=True, map_location=torch.device('cpu')))
+            weights = torch_apply_fn_to_state_1(model.state_dict(), lambda x: x.clone())
+        elif _is_torch_ensemble_model(model):
+            # model is Ensemble pytorch
+            import torch
+            from dafne_dl.misc import torch_apply_fn_to_state_1
+            weights=[]
+            for ii in range(len(model)):
+                model[ii].load_state_dict(torch.load(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.pt'), weights_only=True, map_location=torch.device('cpu')))
+                weight = torch_apply_fn_to_state_1(model[ii].state_dict(), lambda x: x.clone())
+                weights.append(weight)
 
             filename = f'models/{model_name_prefix}_{timestamp}.model'
 
@@ -90,21 +115,9 @@ def generate_convert(model_id,
 
     print('Saved', filename)
 
-    if info_json:
-
-        print(info_json)
-
-        try:
-            if 'model_name' in info_json: 
-                json_file_name = f'models/{info_json['model_name']}.json'
-
-                with open(json_file_name, 'w', encoding='utf-8') as f:
-                    json.dump(info_json, f, ensure_ascii=False, indent=4)
-
-                print('Saved', json_file_name)
-
-        except FileNotFoundError:
-            pass
+    json_file_name = f'models/{model_name_prefix}.json'
+    with open(json_file_name, 'w') as f:
+        modelObject.save_json_metadata(f, pretty=True)
 
 def save_weights_torch(model_id,
                        model_path,
