@@ -23,6 +23,7 @@ if 'generate_convert' not in locals() and 'generate_convert' not in globals():
 
 try:
     from dafne_dl import DynamicDLModel
+    # from dafne_dl.DynamicDLModel import DynamicDLModel
 except ModuleNotFoundError:
     from dl import DynamicDLModel
 
@@ -468,11 +469,32 @@ def leg_incremental_mem(modelObj: DynamicDLModel, trainingData: dict, trainingOu
     history = netc.fit(x=training_generator, steps_per_epoch=steps, epochs=5, verbose=1)
     print('Done. Elapsed', time.time() - t)
 
+metadata = {
+}
+
+info_json = {
+    'categories': [["MSK", "Muscle", "Lower limbs"]],
+    'variants': ["", "Left", "Right"],
+    'dimensionality': "2",
+    'model_name': 'Leg',
+    'model_type': 'DynamicDLModel',
+    'info': {
+        'Description': 'Segmentation of the muscles of the lower leg',
+        'Author':	'Dafne team',
+        'Modality': 'MRI',
+        'Orientation': 'Axial',
+        "Link": "https://dafne.network/",
+    },
+    }
 
 generate_convert(model_id='ba333b4d-90e7-4108-aca5-9216f408d91e',
                  default_weights_path=os.path.join('weights', 'weights_gamba_split.hdf5'),
                  model_name_prefix='Leg',
                  model_create_function=gamba_unet,
                  model_apply_function=gamba_apply,
-                 model_learn_function=leg_incremental_mem
+                 model_learn_function=leg_incremental_mem,
+                 dimensionality=2,
+                 model_type=DynamicDLModel,
+                 metadata=metadata,
+                 info_json = info_json
                  )
