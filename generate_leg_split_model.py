@@ -475,11 +475,11 @@ metadata = {
     'dimensionality': "2",
     'model_name': 'Leg',
     'model_type': 'DynamicDLModel',
+    'orientation': 'Axial',
     'info': {
         'Description': 'Segmentation of the muscles of the lower leg',
         'Author':	'Dafne team',
         'Modality': 'MRI',
-        'Orientation': 'Axial',
         "Link": "https://dafne.network/",
     },
 }

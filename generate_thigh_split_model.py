@@ -451,10 +451,26 @@ def thigh_incremental_mem(modelObj: DynamicDLModel, trainingData: dict, training
     print('Done. Elapsed', time.time() - t)
 
 
+metadata = {
+    'categories': [["MSK", "Muscle", "Lower limbs"]],
+    'variants': ["", "Left", "Right"],
+    'dimensionality': "2",
+    'model_name': 'Thigh',
+    'model_type': 'DynamicDLModel',
+    'orientation': 'Axial',
+    'info': {
+        'Description': 'Segmentation of the muscles of the thigh',
+        'Author':	'Dafne team',
+        'Modality': 'MRI',
+        "Link": "https://dafne.network/",
+    },
+}
+
 generate_convert(model_id='210e2a21-1984-4e6f-8675-bf57bbabef2f',
                  default_weights_path=os.path.join('weights', 'weights_coscia_split.hdf5'),
                  model_name_prefix='Thigh',
                  model_create_function=coscia_unet,
                  model_apply_function=coscia_apply,
-                 model_learn_function=thigh_incremental_mem
+                 model_learn_function=thigh_incremental_mem,
+                 metadata=metadata,
                  )

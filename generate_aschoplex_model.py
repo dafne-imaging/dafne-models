@@ -630,11 +630,11 @@ info_json = {
     'dimensionality': "3",
     'model_name': 'aschoplex',
     'model_type': 'DynamicEnsembleModel',
+    'orientation': '', #'Axial',
     'info': {
         'Description': 'ASCHOPLEX: automatic segmentation of Choroid Plexus model',
         'Author':	'BAMM group',
         'Modality': 'MRI',
-        'Orientation': '', #'Axial',
         "Link": '',
     },
     }
