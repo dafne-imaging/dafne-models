@@ -617,15 +617,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
 
 metadata = {
-    'dependencies': {
-        'monai': 'monai = 1.4.0',
-        'torchio': 'torchio = 0.20.1',
-    },
-    'description': 'This model segments Choroid Plexus from T1-w MRI images based on ASCHOPLEX.',
-}
-
-info_json = {
-    'categories': ['CHP'],
+    'categories': [['Neuro', 'Brain', 'CHP']],
     'variants': [""],
     'dimensionality': "3",
     'model_name': 'aschoplex',
@@ -637,7 +629,11 @@ info_json = {
         'Modality': 'MRI',
         "Link": '',
     },
+    'dependencies': {
+        'monai': 'monai == 1.4.0',
+        'torchio': 'torchio == 0.20.1',
     }
+}
     
 
 generate_convert(model_id='e2bb676f-6e8e-45b8-b5d7-542ef8f3e542',
@@ -648,6 +644,5 @@ generate_convert(model_id='e2bb676f-6e8e-45b8-b5d7-542ef8f3e542',
                  model_learn_function=ensemble_incremental_learning,
                  dimensionality=3,
                  model_type=DynamicEnsembleModel,
-                 metadata=metadata,
-                 info_json = info_json
+                 metadata=metadata
                  )
