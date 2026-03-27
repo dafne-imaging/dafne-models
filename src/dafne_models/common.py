@@ -1,7 +1,7 @@
 import os
 import shutil
 import sys
-import json
+import dill
 
 from dafne_dl import DynamicDLModel
 
@@ -57,46 +57,61 @@ def generate_convert(model_id,
     """
     if not metadata:
         metadata = {}
+    weights = None
+    existing_model = False
+    base_folder = 'models'
     if len(sys.argv) > 1:
-        # convert an existing model
-        print("Converting model", sys.argv[1])
-        old_model_path = sys.argv[1]
-        filename = old_model_path
-        old_model = model_type.Load(open(old_model_path, 'rb'))
-        shutil.move(old_model_path, old_model_path + '.bak')
-        weights = old_model.get_weights()
-        timestamp = old_model.timestamp_id
-        model_id = old_model.model_id
-    else:
+        filename = sys.argv[1]
+        base_folder = os.path.dirname(filename)
+        if filename.endswith('.model'):
+            # convert an existing model
+            print("Converting model", sys.argv[1])
+            old_model_path = sys.argv[1]
+            filename = old_model_path
+            old_model = model_type.Load(open(old_model_path, 'rb'))
+            shutil.move(old_model_path, old_model_path + '.bak')
+            weights = old_model.get_weights()
+            timestamp = old_model.timestamp_id
+            model_id = old_model.model_id
+            if not metadata:
+                metadata = old_model.get_metadata() # only read the old metadata if no metadata was provided
+            existing_model = True
+        else:
+            # this is a weights pickle
+            print("Loading weights from pickle")
+            with open(filename, 'rb') as f:
+                weights = dill.load(f)
+    if not existing_model:
         model_id = model_id
         timestamp = 1610001000
         model = model_create_function()
-        if _is_tf_model(model):
-            model.load_weights(default_weights_path)
-            weights = model.get_weights()
-        elif _is_tf_ensemble_model(model):
-            # model is Ensemble tf
-            weights=[]
-            for ii in range(len(model)):
-                model[ii].load_weights(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.h5'))
-                weight = model[ii].get_weights()
-                weights.append(weight)
-        elif _is_torch_model(model):
-            import torch
-            from dafne_dl.misc import torch_apply_fn_to_state_1
-            model.load_state_dict(torch.load(default_weights_path, weights_only=True, map_location=torch.device('cpu')))
-            weights = torch_apply_fn_to_state_1(model.state_dict(), lambda x: x.clone())
-        elif _is_torch_ensemble_model(model):
-            # model is Ensemble pytorch
-            import torch
-            from dafne_dl.misc import torch_apply_fn_to_state_1
-            weights=[]
-            for ii in range(len(model)):
-                model[ii].load_state_dict(torch.load(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.pt'), weights_only=True, map_location=torch.device('cpu')))
-                weight = torch_apply_fn_to_state_1(model[ii].state_dict(), lambda x: x.clone())
-                weights.append(weight)
+        if not weights:
+            if _is_tf_model(model):
+                model.load_weights(default_weights_path)
+                weights = model.get_weights()
+            elif _is_tf_ensemble_model(model):
+                # model is Ensemble tf
+                weights=[]
+                for ii in range(len(model)):
+                    model[ii].load_weights(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.h5'))
+                    weight = model[ii].get_weights()
+                    weights.append(weight)
+            elif _is_torch_model(model):
+                import torch
+                from dafne_dl.misc import torch_apply_fn_to_state_1
+                model.load_state_dict(torch.load(default_weights_path, weights_only=True, map_location=torch.device('cpu')))
+                weights = torch_apply_fn_to_state_1(model.state_dict(), lambda x: x.clone())
+            elif _is_torch_ensemble_model(model):
+                # model is Ensemble pytorch
+                import torch
+                from dafne_dl.misc import torch_apply_fn_to_state_1
+                weights=[]
+                for ii in range(len(model)):
+                    model[ii].load_state_dict(torch.load(os.path.join(default_weights_path,f'fold_{ii}', 'best_metric_model.pt'), weights_only=True, map_location=torch.device('cpu')))
+                    weight = torch_apply_fn_to_state_1(model[ii].state_dict(), lambda x: x.clone())
+                    weights.append(weight)
 
-            filename = f'models/{model_name_prefix}_{timestamp}.model'
+        filename = os.path.join(base_folder, f'{model_name_prefix}_{timestamp}.model')
 
     modelObject = model_type(model_id,
                                  model_create_function,
@@ -121,7 +136,7 @@ def generate_convert(model_id,
 
     print('Saved', filename)
 
-    json_file_name = f'models/{model_name_prefix}.json'
+    json_file_name = os.path.join(base_folder, f'{model_name_prefix}.json')
     with open(json_file_name, 'w') as f:
         modelObject.save_json_metadata(f, pretty=True)
 

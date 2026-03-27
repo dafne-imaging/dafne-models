@@ -75,7 +75,7 @@ def init_folds():
 
     model_fold3 = SwinUNETR(
         feature_size= 48,
-        img_size=(128,128,128),
+        #img_size=(128,128,128),
         in_channels=1,
         out_channels=2,
         spatial_dims= 3,
@@ -85,7 +85,7 @@ def init_folds():
     
     model_fold4 = SwinUNETR(
         feature_size= 48,
-        img_size=(128,128,128),
+        #img_size=(128,128,128),
         in_channels=1,
         out_channels=2,
         spatial_dims= 3,
@@ -630,8 +630,9 @@ metadata = {
         "Link": '',
     },
     'dependencies': {
-        'monai': 'monai == 1.4.0',
-        'torchio': 'torchio == 0.20.1',
+        'monai': 'monai>=1.5.0',
+        'torchio': 'torchio>=0.20.1',
+        'einops': 'einops'
     }
 }
     
