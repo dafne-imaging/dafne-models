@@ -25,6 +25,9 @@ def _is_torch_ensemble_model(model):
         return True
     return False
 
+def set_default_value(metadata_dictionary, key, value):
+    if key not in metadata_dictionary:
+        metadata_dictionary[key] = value
 
 def generate_convert(model_id,
                      default_weights_path,
@@ -57,6 +60,11 @@ def generate_convert(model_id,
     """
     if not metadata:
         metadata = {}
+    set_default_value(metadata, 'model_name', model_name_prefix)
+    set_default_value(metadata, 'model_type', model_type.__name__)
+    set_default_value(metadata, 'dimensionality', str(dimensionality))
+    set_default_value(metadata, 'variants', [''])
+    set_default_value(metadata, 'categories', [])
     weights = None
     existing_model = False
     base_folder = 'models'
