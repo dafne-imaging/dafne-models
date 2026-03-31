@@ -276,6 +276,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     except:
         import numpy as np
 
+    print("Starting Aschoplex incremental learning")
+
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:native,max_split_size_mb:32,expandable_segments:True"
 
     set_determinism(seed=0)
@@ -284,6 +286,8 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
     MODEL_SIZE = (128,128,128)
     BATCH_SIZE = bs
     MIN_TRAINING_IMAGES = minTrainImages
+    DO_VALIDATION = False
+    MAX_ITERATIONS = 50 # 4000 in the original case
 
     if modelObj.device.type == 'cpu':
         device = 'cpu'
@@ -322,16 +326,17 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         ]
     )
 
-    val_transforms = monai_transforms.Compose(
-        [
-            monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim=0), #  channel_dim='no_channel'
-            monai_transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
-            monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=(True, True)),
-            monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
-            monai_transforms.NormalizeIntensityd(keys=["image"],channel_wise=True, nonzero=True),
-            monai_transforms.CastToTyped(keys=["image", "label"], dtype= (np.float32, np.uint8)),
-        ]
-    )
+    if DO_VALIDATION:
+        val_transforms = monai_transforms.Compose(
+            [
+                monai_transforms.EnsureChannelFirstd(keys=["image", "label"], channel_dim=0), #  channel_dim='no_channel'
+                monai_transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
+                monai_transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest"), align_corners=(True, True)),
+                monai_transforms.CastToTyped(keys=["image"], dtype= np.float32),
+                monai_transforms.NormalizeIntensityd(keys=["image"],channel_wise=True, nonzero=True),
+                monai_transforms.CastToTyped(keys=["image", "label"], dtype= (np.float32, np.uint8)),
+            ]
+        )
 
     post_pred = monai_transforms.Compose(
         [monai_transforms.EnsureType(), monai_transforms.AsDiscrete(argmax=True, to_onehot=2)]
@@ -355,20 +360,24 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
     jj=math.ceil(3*len(image_list)/4)
 
+    print("Preparing images")
+
     for kk in range(len(image_list)):
+        image=image_list[kk]
+        seg=mask_list[kk]
+        affine_=affine_list[kk]
 
-            image=image_list[kk]
-            seg=mask_list[kk]
-            affine_=affine_list[kk]
+        if image.ndim == 3:
+            image = np.expand_dims(image, axis=0)
+            seg = np.expand_dims(seg, axis=0)
 
-            if image.ndim == 3: 
-                image = np.expand_dims(image, axis=0)
-                seg = np.expand_dims(seg, axis=0)
-
+        if DO_VALIDATION:
             if kk>=jj:
                 validation_files.append({"image": MetaTensor(image, affine = affine_), "label": MetaTensor(seg, affine = affine_)})
             else:
                 train_files.append({"image": MetaTensor(image, affine = affine_), "label": MetaTensor(seg, affine = affine_)})
+        else:
+            train_files.append({"image": MetaTensor(image, affine=affine_), "label": MetaTensor(seg, affine=affine_)})
     
     print(f'Incremental learning for Choroid Plexus with {nImages} images')
     t = time.time()
@@ -381,16 +390,19 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
         num_workers=8,
         progress=False,
         )
-    val_ds = CacheDataset(
-        data=validation_files, 
-        transform=val_transforms, 
-        cache_rate=float(torch.cuda.device_count()) / 4.0,
-        num_workers=2,
-        progress = False,
-        )
-    
+
+    if DO_VALIDATION:
+        val_ds = CacheDataset(
+            data=validation_files,
+            transform=val_transforms,
+            cache_rate=float(torch.cuda.device_count()) / 4.0,
+            num_workers=2,
+            progress = False,
+            )
+
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, num_workers=4, shuffle = True)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, num_workers=4, shuffle = False)
+    if DO_VALIDATION:
+        val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, num_workers=4, shuffle = False)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -402,7 +414,7 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
     dice_metric = DiceMetric(include_background=False, reduction="mean")
 
-    max_iterations= 4000
+    max_iterations= MAX_ITERATIONS
     num_iterations_per_validation= 10
     num_epochs_per_validation = num_iterations_per_validation // len(train_files)
     num_epochs_per_validation = max(num_epochs_per_validation, 1)
@@ -520,75 +532,76 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
             torch.cuda.empty_cache()
 
-            if (epoch + 1) % val_interval == 0 or (epoch + 1) == num_epochs:
-                print('validation')
-                torch.cuda.empty_cache()
-                model_.eval()
+            if DO_VALIDATION:
+                if (epoch + 1) % val_interval == 0 or (epoch + 1) == num_epochs:
+                    print('validation')
+                    torch.cuda.empty_cache()
+                    model_.eval()
 
-                with torch.no_grad():
-                    _index = 0
-                    dice_vals = list()
+                    with torch.no_grad():
+                        _index = 0
+                        dice_vals = list()
 
-                    for val_data in val_loader:
+                        for val_data in val_loader:
 
-                        val_images = val_data["image"].to(device)
-                        val_labels = val_data["label"].to(device)
-                        
-                        with torch.amp.autocast('cuda'):
-                            val_outputs = sliding_window_inference(
-                                val_images,
-                                MODEL_SIZE,
-                                1,
-                                model_,
-                                overlap=0.8,
-                            )
-                        val_outputs = post_pred(val_outputs[0, ...])
-                        val_outputs = val_outputs[None, ...]
-                        val_labels = post_label(val_labels[0, ...])
-                        val_labels = val_labels[None, ...]
+                            val_images = val_data["image"].to(device)
+                            val_labels = val_data["label"].to(device)
 
-                        dice_metric(y_pred=val_outputs, y=val_labels)
-                        dice = dice_metric.aggregate().item()
-                        dice_vals.append(dice)
+                            with torch.amp.autocast('cuda'):
+                                val_outputs = sliding_window_inference(
+                                    val_images,
+                                    MODEL_SIZE,
+                                    1,
+                                    model_,
+                                    overlap=0.8,
+                                )
+                            val_outputs = post_pred(val_outputs[0, ...])
+                            val_outputs = val_outputs[None, ...]
+                            val_labels = post_label(val_labels[0, ...])
+                            val_labels = val_labels[None, ...]
 
-                        del val_data, val_labels, val_outputs, dice
+                            dice_metric(y_pred=val_outputs, y=val_labels)
+                            dice = dice_metric.aggregate().item()
+                            dice_vals.append(dice)
+
+                            del val_data, val_labels, val_outputs, dice
+                            torch.cuda.empty_cache()
+
+                            _index += 1
+                        dice_metric.reset()
+                        dice_val = np.mean(dice_vals)
+
+                        del dice_vals
                         torch.cuda.empty_cache()
 
-                        _index += 1
-                    dice_metric.reset()
-                    dice_val = np.mean(dice_vals)
+                        if (epoch + 1) == 1:
+                            last_good_weights = io.BytesIO()
+                            torch.save(model_.state_dict(), last_good_weights)
 
-                    del dice_vals
+                        if (dice_val > dice_val_best) :
+
+                            dice_val_best = dice_val
+                            global_step_best = epoch +1
+
+
+                            # last_good_weights = compressed_pickle.dumps(model_.state_dict())
+                            last_good_weights = io.BytesIO()
+                            torch.save(model_.state_dict(), last_good_weights)
+
+                            print(
+                                f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f} \n"
+                            )
+                        else:
+                            print(
+                                f"Model Was Not Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
+                            )
+                        print(
+                            "current epoch: {} current mean dice: {:.4f} best mean dice: {:.4f} at epoch {}".format(
+                                epoch + 1, dice_val, dice_val_best, global_step_best
+                            )
+                        )
+
                     torch.cuda.empty_cache()
-
-                    if (epoch + 1) == 1:
-                        last_good_weights = io.BytesIO()
-                        torch.save(model_.state_dict(), last_good_weights)
-                    
-                    if (dice_val > dice_val_best) : 
-                        
-                        dice_val_best = dice_val
-                        global_step_best = epoch +1 
-
-                        
-                        # last_good_weights = compressed_pickle.dumps(model_.state_dict()) 
-                        last_good_weights = io.BytesIO()
-                        torch.save(model_.state_dict(), last_good_weights)
-
-                        print(
-                            f"Model Was Saved ! Current Best Avg. Dice: {dice_val_best:.4f} \n"
-                        )
-                    else:
-                        print(
-                            f"Model Was Not Saved ! Current Best Avg. Dice: {dice_val_best:.4f},  Current Avg. Dice: {dice_val:.4f} \n"
-                        )
-                    print(
-                        "current epoch: {} current mean dice: {:.4f} best mean dice: {:.4f} at epoch {}".format(
-                            epoch + 1, dice_val, dice_val_best, global_step_best
-                        )
-                    )
-                
-                torch.cuda.empty_cache()
         
         with torch.no_grad():    
                
@@ -601,12 +614,12 @@ def ensemble_incremental_learning(modelObj, trainingData: dict, trainingOutputs,
 
 
             # new_state_dict = compressed_pickle.loads(last_good_weights)
-            last_good_weights.seek(0)
-            new_state_dict = torch.load(last_good_weights, map_location=torch.device('cuda:0'))
-            modelObj.model[ii].load_state_dict(new_state_dict)
-            # state_dicts.append(new_state_dict)
-
-            del new_state_dict, last_good_weights, lr_scheduler
+            if DO_VALIDATION:
+                # only load good weights if validation was done, otherwise we just keep the last weights
+                last_good_weights.seek(0)
+                new_state_dict = torch.load(last_good_weights, map_location=torch.device('cuda:0'))
+                modelObj.model[ii].load_state_dict(new_state_dict)
+                del new_state_dict, last_good_weights, lr_scheduler
 
         torch.cuda.empty_cache()
         gc.collect()
