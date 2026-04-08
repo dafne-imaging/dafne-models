@@ -644,8 +644,8 @@ metadata = {
     },
     'dependencies': {
         'monai': 'monai>=1.5.0',
-        'SimpleITK': 'SimpleITK-SimpleElastix -SimpleITK', # force SimpleITK-SimpleElastix instead of simple SimpleITK
         'torchio': 'torchio>=0.20.1 --SimpleITK', # Uninstall SimpleITK after Torchio because it messes up Dafne
+        'SimpleITK': 'SimpleITK-SimpleElastix -SimpleITK', # force SimpleITK-SimpleElastix instead of simple SimpleITK
         'einops': 'einops'
     }
 }

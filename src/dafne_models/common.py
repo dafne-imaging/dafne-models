@@ -4,6 +4,8 @@ import sys
 import dill
 
 from dafne_dl import DynamicDLModel
+from dafne_dl.model_loaders import ensure_dependencies
+
 
 def _is_tf_model(model):
     if hasattr(model, 'load_weights'):
@@ -65,6 +67,9 @@ def generate_convert(model_id,
     set_default_value(metadata, 'dimensionality', str(dimensionality))
     set_default_value(metadata, 'variants', [''])
     set_default_value(metadata, 'categories', [])
+    dependencies = metadata.get('dependencies', None)
+    if dependencies:
+        ensure_dependencies(dependencies)
     weights = None
     existing_model = False
     base_folder = 'models'
