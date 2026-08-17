@@ -9,7 +9,8 @@ import voxel as vx
 from dicomUtils import medical_volume_from_path, realign_medical_volume
 
 from ..utils.model_tools import parse_complex_options, ensure_dependencies_from_metadata, \
-    ensure_compatible_orientation_inplace, load_model_and_install_deps
+    ensure_compatible_orientation_inplace, load_model_and_install_deps, \
+    get_medicalvolume_orientation_from_metadata
 
 
 def main():
@@ -34,10 +35,22 @@ def main():
 
     model = load_model_and_install_deps(args.model)
     metadata = model.get_metadata()
+    dimensionality = model.data_dimensionality
 
     image = medical_volume_from_path(args.image_path, reorient_data=False)
 
-    ensure_compatible_orientation_inplace(image, metadata)
+    original_orientation = image.orientation
+    model_orientation = get_medicalvolume_orientation_from_metadata(metadata)
+    # Mirrors the live Dafne app (MuscleSegmentation in ../dafne): only the
+    # 3D path (getSegmentedMasks_3D) canonicalizes orientation before
+    # inference, via ensure_compatible_orientation. The 2D path
+    # (getSegmentedMasks) feeds slices straight from the raw, un-reoriented
+    # loaded volume with no reformatting at all -- so 2D model plugins are
+    # responsible for handling Dafne's raw per-slice orientation themselves.
+    # Reformatting here for 2D models would make this script exercise a
+    # different (and incorrect) code path than the real app actually uses.
+    if dimensionality != 2:
+        ensure_compatible_orientation_inplace(image, metadata)
 
     resolution = image.pixel_spacing
     inputs = [image.volume.astype(np.float32)]
@@ -51,7 +64,6 @@ def main():
 
     print("Contrasts loaded")
 
-    dimensionality = model.data_dimensionality
     output_masks = {}
     if dimensionality == 2: # this is a 2D model
         print("2D model")
@@ -80,7 +92,7 @@ def main():
 
     for key, mask in output_masks.items():
         output_data = vx.MedicalVolume(mask, image.affine)
-        if model_orientation is not None and model_orientation != original_orientation:
+        if dimensionality != 2 and model_orientation is not None and model_orientation != original_orientation:
             output_data.reformat(original_orientation, inplace=True)
         writer.save(output_data, os.path.join(args.output, f'{key}.nii.gz'))
 
