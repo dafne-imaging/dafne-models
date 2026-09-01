@@ -79,7 +79,7 @@ def main():
                 output_masks[key][:, :, i] = mask
     else: # this is a 3D model
         print("3D model")
-        input_dict = {'image': inputs[0], 'resolution': resolution, 'options': options, 'split_laterality': False, 'classification': model_classification}
+        input_dict = {'image': inputs[0], 'affine': image.affine, 'resolution': resolution, 'options': options, 'split_laterality': False, 'classification': model_classification}
         for idx, contrast in enumerate(inputs[1:]):
             print("Adding contrast", f'image{idx+2}')
             input_dict[f'image{idx+2}'] = contrast
