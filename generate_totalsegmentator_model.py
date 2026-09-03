@@ -39,6 +39,7 @@ def apply_totalsegmentator_ct(modelObj, data):
     from totalsegmentator.python_api import totalsegmentator
     from totalsegmentator.map_to_binary import class_map
 
+    MIN_LABEL_VOXELS = 5  # drop masks with fewer than this many positive voxels (organ not present)
     CT_VARIANT_SUBSETS = {
         '': None,
         'Abdomen': [
@@ -131,11 +132,12 @@ def apply_totalsegmentator_ct(modelObj, data):
 
     seg_data = seg.get_fdata().astype(np.uint8)
     label_map = class_map['total']
-    return {
+    masks = {
         name: (seg_data == lid).astype(np.uint8)
         for lid, name in label_map.items()
         if roi_subset is None or name in roi_subset
     }
+    return {name: mask for name, mask in masks.items() if mask.sum() >= MIN_LABEL_VOXELS}
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,7 @@ def apply_totalsegmentator_mr(modelObj, data):
     from totalsegmentator.python_api import totalsegmentator
     from totalsegmentator.map_to_binary import class_map
 
+    MIN_LABEL_VOXELS = 5  # drop masks with fewer than this many positive voxels (organ not present)
     MR_VARIANT_SUBSETS = {
         '': None,
         'Abdomen': [
@@ -210,11 +213,12 @@ def apply_totalsegmentator_mr(modelObj, data):
 
     seg_data = seg.get_fdata().astype(np.uint8)
     label_map = class_map['total_mr']
-    return {
+    masks = {
         name: (seg_data == lid).astype(np.uint8)
         for lid, name in label_map.items()
         if roi_subset is None or name in roi_subset
     }
+    return {name: mask for name, mask in masks.items() if mask.sum() >= MIN_LABEL_VOXELS}
 
 
 # ---------------------------------------------------------------------------
