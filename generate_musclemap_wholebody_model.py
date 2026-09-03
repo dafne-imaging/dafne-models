@@ -78,6 +78,8 @@ Run:
 
 import os
 
+INCREMENTAL_LEARN = False
+
 if 'generate_convert' not in locals() and 'generate_convert' not in globals():
     from dafne_models.common import generate_convert
 
@@ -536,7 +538,7 @@ generate_convert(
     model_name_prefix='MuscleMap_Wholebody',
     model_create_function=init_musclemap_wholebody_unet,
     model_apply_function=musclemap_wholebody_apply,
-    model_learn_function=musclemap_wholebody_incremental_learn,
+    model_learn_function=musclemap_wholebody_incremental_learn if INCREMENTAL_LEARN else None,
     dimensionality=2,
     model_type=DynamicTorchModel,
     metadata=metadata,

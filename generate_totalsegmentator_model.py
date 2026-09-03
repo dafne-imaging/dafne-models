@@ -267,7 +267,7 @@ if __name__ == '__main__':
                 'Reference': 'Wasserthal et al., Radiology: AI 2023',
             },
             'dependencies': {
-                'totalsegmentator': 'TotalSegmentator >= 2.0',
+                'totalsegmentator': 'TotalSegmentator >= 2.0  --SimpleITK ++!SimpleITK-SimpleElastix',
                 'appdirs': 'appdirs',
             },
         },
@@ -293,7 +293,7 @@ if __name__ == '__main__':
                 'Reference': 'Wasserthal et al., Radiology 2025',
             },
             'dependencies': {
-                'totalsegmentator': 'TotalSegmentator >= 2.0',
+                'totalsegmentator': 'TotalSegmentator >= 2.0 --SimpleITK ++!SimpleITK-SimpleElastix',
                 'appdirs': 'appdirs',
             },
         },
