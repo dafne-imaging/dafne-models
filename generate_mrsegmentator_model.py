@@ -13,7 +13,6 @@ Run:
 MRSegmentator weights are stored under Dafne's own data directory (via
 appdirs) rather than ~/.mrsegmentator.
 
-See MRSegmentator_Integration_Plan.md for the full design rationale.
 """
 
 import json
